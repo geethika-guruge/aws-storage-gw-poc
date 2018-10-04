@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Storage Gateway S3
+
+Resources:
+
+  S3BucketForSharedDrive:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: "aws-meetup-storage-gw" 
+      LifecycleConfiguration:
+        Rules:
+          - AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+            Status: Enabled
+      ReplicationConfiguration:
+        Role: !GetAtt [SharedDriveBucketBackupRole, Arn]
+        Rules:
+        - Destination:
+            Bucket: !Join ['', ['arn:aws:s3:::', 'aws-meetup-storage-gw-backup' ]]
+            StorageClass: STANDARD
+          Id: Backup
+          Prefix: ''
+          Status: Enabled
+      VersioningConfiguration:
+        Status: Enabled
+
+  StorageGatewayBucketAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [storagegateway.amazonaws.com]
+  StorageGatewayBucketAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action: [ 
+            's3:GetAccelerateConfiguration', 
+            's3:GetBucketLocation', 
+            's3:GetBucketVersioning', 
+            's3:ListBucket', 
+            's3:ListBucketVersions', 
+            's3:ListBucketMultipartUploads'
+          ]
+          Effect: Allow
+          Resource: 
+            - !Join ['', ['arn:aws:s3:::', !Ref 'S3BucketForSharedDrive']]
+        - Action: [
+            's3:AbortMultipartUpload', 
+            's3:DeleteObject', 
+            's3:DeleteObjectVersion', 
+            's3:GetObject', 
+            's3:GetObjectAcl', 
+            's3:GetObjectVersion', 
+            's3:ListMultipartUploadParts', 
+            's3:PutObject', 
+            's3:PutObjectAcl'
+          ]
+          Effect: Allow
+          Resource: 
+            - !Join ['', ['arn:aws:s3:::', !Ref 'S3BucketForSharedDrive', /*]]
+      PolicyName: AllowStorageGatewayAssumeBucketAccessPolicy
+      Roles: [!Ref 'StorageGatewayBucketAccessRole']  
+
+  SharedDriveBucketPolicy: 
+    Type: AWS::S3::BucketPolicy
+    Properties: 
+      Bucket: 
+        Ref: S3BucketForSharedDrive
+      PolicyDocument: 
+        Statement: 
+          - 
+            Action: 
+              - "s3:DeleteObject"
+              - "s3:DeleteObjectVersion"
+            Effect: "Deny"
+            Resource: !Join ['', ['arn:aws:s3:::', !Ref 'S3BucketForSharedDrive', '/*']]
+            Condition: 
+              StringNotLike: 
+                aws:userId: 
+                  - !Ref AWS::AccountId
+                  - !Join [ "", [ !GetAtt StorageGatewayBucketAccessRole.RoleId,':*' ] ]
+            Principal: "*"
+        #  - 
+        #    Action: 
+        #      - "s3:DeleteBucket"
+        #      - "s3:DeleteBucketPolicy"
+        #    Effect: "Deny"
+        #    Resource: !Join ['', ['arn:aws:s3:::', !Ref 'S3BucketForSharedDrive']]
+        #    Principal: "*"  
+
+  SharedDriveBucketBackupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [s3.amazonaws.com]
+  BucketBackupPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action: ['s3:GetReplicationConfiguration', 's3:ListBucket']
+          Effect: Allow
+          Resource: 
+            - !Join ['', ['arn:aws:s3:::', !Ref 'S3BucketForSharedDrive']]
+        - Action: ['s3:GetObjectVersion', 's3:GetObjectVersionAcl']
+          Effect: Allow
+          Resource: 
+            - !Join ['', ['arn:aws:s3:::', !Ref 'S3BucketForSharedDrive', /*]]
+        - Action: ['s3:ReplicateObject', 's3:ReplicateDelete']
+          Effect: Allow
+          Resource: 
+            - !Join ['', ['arn:aws:s3:::', 'aws-meetup-storage-gw-backup', /*]]
+      PolicyName: BucketBackupPolicy
+      Roles: [!Ref 'SharedDriveBucketBackupRole']
+
+Outputs:
+
+  S3BucketForSharedDrive:
+    Description: "S3 Bucket Name"
+    Value: !Ref "S3BucketForSharedDrive"
+
+  StorageGatewayBucketAccessRole:
+    Description: "IAM Role for Storage Gateway Bucket Access"
+    Value: !Ref "StorageGatewayBucketAccessRole"
+
+  StorageGatewayBucketAccessRoleId:
+    Description: The logical ID of the IAM role
+    Value: !GetAtt StorageGatewayBucketAccessRole.RoleId
